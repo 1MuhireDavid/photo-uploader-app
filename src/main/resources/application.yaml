@@ -1,0 +1,34 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: photo-uploader
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:photogallery}
+    username: ${DB_USERNAME:photoapp}
+    password: ${DB_PASSWORD:photoapp}
+  jpa:
+    # No separate migration tool for this lab -- the "photos" table is
+    # created/updated automatically from the Photo entity at startup.
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  servlet:
+    multipart:
+      max-file-size: 15MB
+      max-request-size: 15MB
+
+app:
+  photos-bucket-name: ${PHOTOS_BUCKET_NAME:local-dev-bucket}
+  cloudfront-domain: ${CLOUDFRONT_DOMAIN:localhost}
+  owner-name: ${APP_OWNER_NAME:DAVID MUHIRE}
+  lab-name: ${LAB_NAME:Photo Uploader Lab}
+
+logging:
+  level:
+    root: INFO

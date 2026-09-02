@@ -1,0 +1,41 @@
+{
+  "family": "photo-uploader-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-uploader-task-execution-role",
+  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-uploader-task-role",
+  "containerDefinitions": [
+    {
+      "name": "photo-uploader-container",
+      "image": "<IMAGE1_NAME>",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8080, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "APP_OWNER_NAME", "value": "<YOUR_FULL_NAME>" },
+        { "name": "LAB_NAME", "value": "Photo Uploader Lab" },
+        { "name": "AWS_REGION", "value": "<AWS_REGION>" },
+        { "name": "PHOTOS_BUCKET_NAME", "value": "<PHOTOS_BUCKET_NAME>" },
+        { "name": "CLOUDFRONT_DOMAIN", "value": "<CLOUDFRONT_DOMAIN>" },
+        { "name": "DB_HOST", "value": "<DB_HOST>" },
+        { "name": "DB_PORT", "value": "5432" },
+        { "name": "DB_NAME", "value": "photogallery" }
+      ],
+      "secrets": [
+        { "name": "DB_USERNAME", "valueFrom": "<DB_SECRET_ARN>:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "<DB_SECRET_ARN>:password::" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/photo-uploader-app",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    }
+  ]
+}

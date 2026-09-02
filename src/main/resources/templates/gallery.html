@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="${labName}">Photo Uploader Lab</title>
+    <style>
+        :root { color-scheme: light; }
+        body {
+            font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            background: #f6f7f9;
+            color: #1a1a1a;
+        }
+        header {
+            background: #202339;
+            color: #fff;
+            padding: 1.25rem 1.5rem;
+        }
+        header h1 { margin: 0; font-size: 1.4rem; }
+        header p { margin: .25rem 0 0; opacity: .75; font-size: .9rem; }
+        main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+        .upload-card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 1.25rem 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08);
+            margin-bottom: 1.5rem;
+        }
+        .upload-card h2 { margin-top: 0; font-size: 1.1rem; }
+        form.upload-form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+        form.upload-form input[type="text"] {
+            flex: 1 1 220px;
+            padding: .5rem .6rem;
+            border: 1px solid #d5d8dd;
+            border-radius: 6px;
+        }
+        form.upload-form input[type="file"] { flex: 1 1 220px; }
+        form.upload-form button {
+            background: #3a4bff;
+            color: #fff;
+            border: none;
+            padding: .55rem 1.1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        form.upload-form button:hover { background: #2c3ad9; }
+        .flash { padding: .6rem .9rem; border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
+        .flash.success { background: #e4f7e9; color: #1b6e34; }
+        .flash.error { background: #fce8e6; color: #a3221a; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem;
+        }
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08);
+        }
+        .card img { width: 100%; height: 180px; object-fit: cover; display: block; background: #eee; }
+        .card .body { padding: .75rem .9rem; }
+        .card .desc { font-size: .9rem; margin: 0 0 .3rem; }
+        .card .meta { font-size: .75rem; color: #777; margin: 0; }
+        .empty { color: #777; padding: 2rem 0; text-align: center; }
+        footer { text-align: center; color: #999; font-size: .8rem; padding: 2rem 0 1rem; }
+    </style>
+</head>
+<body>
+<header>
+    <h1 th:text="${labName}">Photo Uploader Lab</h1>
+    <p th:text="'by ' + ${appOwnerName}">by DAVID MUHIRE</p>
+</header>
+<main>
+    <div class="upload-card">
+        <h2>Upload a photo</h2>
+        <p th:if="${success}" class="flash success" th:text="${success}"></p>
+        <p th:if="${error}" class="flash error" th:text="${error}"></p>
+        <form class="upload-form" th:action="@{/upload}" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept="image/*" required>
+            <input type="text" name="description" placeholder="Describe this photo" maxlength="1000">
+            <button type="submit">Upload</button>
+        </form>
+    </div>
+
+    <div th:if="${#lists.isEmpty(photos)}" class="empty">
+        No photos yet -- be the first to upload one.
+    </div>
+
+    <div class="grid" th:unless="${#lists.isEmpty(photos)}">
+        <div class="card" th:each="photo : ${photos}">
+            <img th:src="${'https://' + cloudFrontDomain + '/' + photo.s3Key}" th:alt="${photo.description}">
+            <div class="body">
+                <p class="desc" th:text="${#strings.isEmpty(photo.description)} ? '(no description)' : ${photo.description}"></p>
+                <p class="meta" th:text="${#temporals.format(photo.uploadedAt, 'yyyy-MM-dd HH:mm')} + ' UTC'"></p>
+            </div>
+        </div>
+    </div>
+</main>
+<footer>Photo Uploader Lab &mdash; ECS Fargate + S3 + CloudFront (OAC) + RDS PostgreSQL</footer>
+</body>
+</html>

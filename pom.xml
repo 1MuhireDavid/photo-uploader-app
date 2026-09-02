@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.4</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.labs</groupId>
+  <artifactId>photo-uploader</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>photo-uploader</name>
+  <description>Photo Uploader lab -- Spring Boot photo gallery (S3 + CloudFront + RDS Postgres)</description>
+
+  <properties>
+    <java.version>21</java.version>
+    <!-- Pin the embedded Tomcat version Spring Boot's BOM resolves, past
+         the CRITICAL CVEs (CVE-2025-24813 and others) fixed the same way
+         in the ecr-oidc-lab app in this same account; see that lab's
+         docs/architecture.md for the full writeup. Bump alongside any
+         parent version upgrade. -->
+    <tomcat.version>10.1.55</tomcat.version>
+    <aws-java-sdk-v2.version>2.28.16</aws-java-sdk-v2.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-thymeleaf</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+      <version>${aws-java-sdk-v2.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- Fixed name regardless of <version>, so the Dockerfile can always
+         COPY target/app.jar without reading the POM version. -->
+    <finalName>app</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
