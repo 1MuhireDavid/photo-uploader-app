@@ -4,8 +4,8 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
-  "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-uploader-task-execution-role",
-  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-uploader-task-role",
+  "executionRoleArn": "arn:aws:iam::047719661196:role/photo-uploader-task-execution-role",
+  "taskRoleArn": "arn:aws:iam::047719661196:role/photo-uploader-task-role",
   "containerDefinitions": [
     {
       "name": "photo-uploader-container",
@@ -15,24 +15,24 @@
         { "containerPort": 8080, "protocol": "tcp" }
       ],
       "environment": [
-        { "name": "APP_OWNER_NAME", "value": "<YOUR_FULL_NAME>" },
+        { "name": "APP_OWNER_NAME", "value": "David Muhire" },
         { "name": "LAB_NAME", "value": "Photo Uploader Lab" },
-        { "name": "AWS_REGION", "value": "<AWS_REGION>" },
-        { "name": "PHOTOS_BUCKET_NAME", "value": "<PHOTOS_BUCKET_NAME>" },
-        { "name": "CLOUDFRONT_DOMAIN", "value": "<CLOUDFRONT_DOMAIN>" },
-        { "name": "DB_HOST", "value": "<DB_HOST>" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "PHOTOS_BUCKET_NAME", "value": "photo-uploader-photos-047719661196-us-east-1" },
+        { "name": "CLOUDFRONT_DOMAIN", "value": "d1xjbqq5utb6bp.cloudfront.net" },
+        { "name": "DB_HOST", "value": "photo-uploader-databasestack-170jb5s4a8lw-database-d5chavczp41g.c29usw4u0jid.us-east-1.rds.amazonaws.com" },
         { "name": "DB_PORT", "value": "5432" },
         { "name": "DB_NAME", "value": "photogallery" }
       ],
       "secrets": [
-        { "name": "DB_USERNAME", "valueFrom": "<DB_SECRET_ARN>:username::" },
-        { "name": "DB_PASSWORD", "valueFrom": "<DB_SECRET_ARN>:password::" }
+        { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-4fa9220f-01e9-4221-b621-79102afa8da8-OaCLGy:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-4fa9220f-01e9-4221-b621-79102afa8da8-OaCLGy:password::" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/photo-uploader-app",
-          "awslogs-region": "<AWS_REGION>",
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "app"
         }
       }
