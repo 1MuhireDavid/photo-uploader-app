@@ -78,7 +78,7 @@
         <p th:if="${success}" class="flash success" th:text="${success}"></p>
         <p th:if="${error}" class="flash error" th:text="${error}"></p>
         <form class="upload-form" th:action="@{/upload}" method="post" enctype="multipart/form-data">
-            <input type="file" name="file" accept="image/*" required>
+            <input type="file" name="file" accept="image/jpeg,image/png,image/gif,image/webp" required>
             <input type="text" name="description" placeholder="Describe this photo" maxlength="1000">
             <button type="submit">Upload</button>
         </form>

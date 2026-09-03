@@ -71,6 +71,14 @@ public class GalleryController {
             return "redirect:/";
         }
 
+        byte[] content = file.getBytes();
+        String sniffedContentType = sniffImageContentType(content);
+        if (sniffedContentType == null) {
+            redirectAttributes.addFlashAttribute("error",
+                    "Only JPEG, PNG, GIF, or WEBP images are allowed.");
+            return "redirect:/";
+        }
+
         String originalFilename = file.getOriginalFilename() == null ? "photo" : file.getOriginalFilename();
         String safeFilename = UNSAFE_FILENAME_CHARS.matcher(originalFilename).replaceAll("_");
         String s3Key = UUID.randomUUID() + "-" + safeFilename;
@@ -79,13 +87,48 @@ public class GalleryController {
                 PutObjectRequest.builder()
                         .bucket(bucketName)
                         .key(s3Key)
-                        .contentType(file.getContentType())
+                        .contentType(sniffedContentType)
                         .build(),
-                RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+                RequestBody.fromBytes(content));
 
-        photoRepository.save(new Photo(s3Key, originalFilename, description, file.getContentType()));
+        photoRepository.save(new Photo(s3Key, originalFilename, description, sniffedContentType));
 
         redirectAttributes.addFlashAttribute("success", "Photo uploaded.");
         return "redirect:/";
+    }
+
+    // The browser-supplied Content-Type header (MultipartFile#getContentType)
+    // is just a client hint and trivially spoofable -- a renamed .pdf or a
+    // plain POST to /upload can claim to be "image/jpeg". Instead of trusting
+    // it, sniff the real file type from its magic bytes and use THAT for
+    // validation, the S3 object's Content-Type, and the stored DB record.
+    private static String sniffImageContentType(byte[] bytes) {
+        if (startsWith(bytes, 0xFF, 0xD8, 0xFF)) {
+            return "image/jpeg";
+        }
+        if (startsWith(bytes, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) {
+            return "image/png";
+        }
+        if (startsWith(bytes, 0x47, 0x49, 0x46, 0x38)) { // "GIF8" (87a/89a)
+            return "image/gif";
+        }
+        if (bytes.length >= 12
+                && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F'
+                && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+            return "image/webp";
+        }
+        return null;
+    }
+
+    private static boolean startsWith(byte[] bytes, int... signature) {
+        if (bytes.length < signature.length) {
+            return false;
+        }
+        for (int i = 0; i < signature.length; i++) {
+            if ((bytes[i] & 0xFF) != signature[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 }
