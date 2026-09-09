@@ -55,6 +55,8 @@ access for the upload path to fully work; without them the gallery page
 still loads (just against an empty/failing DB, matching how the ALB
 health check would see it):
 
+
+
 ```bash
 cd photo-uploader-app
 mvn spring-boot:run \
