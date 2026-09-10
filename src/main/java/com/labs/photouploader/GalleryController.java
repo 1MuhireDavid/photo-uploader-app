@@ -60,6 +60,7 @@ public class GalleryController {
         
         return "gallery";
     }
+    
 
     @PostMapping("/upload")
     public String upload(
