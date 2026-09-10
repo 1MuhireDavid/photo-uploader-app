@@ -25,7 +25,11 @@ jobs:
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          # TEMPORARY DIAGNOSTIC: hardcoded in place of
+          # ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }} to rule out a bad/stale
+          # secret value vs. a trust-policy/AWS-side problem. Revert once
+          # the test run's result is known.
+          role-to-assume: arn:aws:iam::047719661196:role/photo-uploader-gha-ecr-push-role
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Log in to Amazon ECR
