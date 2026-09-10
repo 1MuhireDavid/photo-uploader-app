@@ -1,11 +1,8 @@
 name: "Build and push container image"
 
-# Tagging strategy (rubric: "consistent and mutable"):
-#   - every successful build on main is pushed under BOTH tags:
-#       sha-<12-char-git-sha>   immutable, for traceability/rollback
-#       latest                  mutable, the ONE tag EventBridge + the
-#                               CodePipeline ECR source action watch as
-#                               "the newest version to deploy"
+# Tagging strategy: keep it simple -- every successful build on main is
+# pushed as ":latest", the one tag EventBridge + the CodePipeline ECR
+# source action watch as "the newest version to deploy".
 #   - the ECR repo itself is ImageTagMutability: MUTABLE (see
 #     photo-uploader-infra/cfn/modules/03-backing-services.yaml), which is
 #     what makes re-pushing ":latest" on every build valid rather than
@@ -35,38 +32,34 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Compute image tags
+      - name: Compute image tag
         id: tags
         run: |
-          SHORT_SHA=$(git rev-parse --short=12 HEAD)
           REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}"
-          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=$REPO_URI:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: false
-          load: true
-          build-args: |
-            APP_VERSION=${{ steps.tags.outputs.short_sha }}
-          tags: |
-            ${{ steps.tags.outputs.sha_tag }}
-            ${{ steps.tags.outputs.latest_tag }}
+          push: true
+          tags: ${{ steps.tags.outputs.latest_tag }}
 
-      - name: Push immutable sha tag (traceability / rollback target)
-        run: docker push ${{ steps.tags.outputs.sha_tag }}
-
-      - name: Push mutable latest tag (triggers the deploy pipeline)
-        run: docker push ${{ steps.tags.outputs.latest_tag }}
+      # CodePipeline's second source action (in photo-uploader-infra) reads
+      # these two files from S3 instead of connecting to GitHub directly --
+      # no CodeStarSourceConnection/GitHub App to authorize by hand.
+      - name: Upload deploy templates for CodePipeline
+        run: |
+          cd ecs
+          zip deploy-templates.zip appspec.yaml taskdef.json
+          aws s3 cp deploy-templates.zip \
+            "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
 
       - name: Summary
         run: |
           echo "### Image pushed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`${{ steps.tags.outputs.sha_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`${{ steps.tags.outputs.latest_tag }}\` (deploy trigger)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deploy templates uploaded to \`s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip\`" >> "$GITHUB_STEP_SUMMARY"
