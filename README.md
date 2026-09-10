@@ -62,7 +62,7 @@ cd photo-uploader-app
 mvn spring-boot:run \
   -Dspring-boot.run.arguments="--DB_HOST=localhost --DB_NAME=photogallery --DB_USERNAME=photoapp --DB_PASSWORD=photoapp --PHOTOS_BUCKET_NAME=my-test-bucket --CLOUDFRONT_DOMAIN=example.cloudfront.net"
 # or
-docker build -t photo-uploader --build-arg APP_VERSION=local .
+docker build -t photo-uploader .
 docker run -p 8080:8080 \
   -e DB_HOST=host.docker.internal -e DB_NAME=photogallery \
   -e DB_USERNAME=photoapp -e DB_PASSWORD=photoapp \
@@ -71,14 +71,11 @@ docker run -p 8080:8080 \
 curl localhost:8080
 ```
 
-## Image tagging strategy: consistent + mutable
+## Image tagging strategy: keep it simple
 
-Every successful build on `main` pushes **two tags** to the same image:
-
-| Tag | Mutability | Purpose |
-|---|---|---|
-| `sha-<12-char-git-sha>` | immutable identity | traceability, manual rollback target |
-| `latest` | **mutable** | the one tag EventBridge and the CodePipeline ECR source action watch -- always "the newest thing on `main`" |
+Every successful build on `main` pushes a single tag, `latest`, to the
+image -- the one tag EventBridge and the CodePipeline ECR source action
+watch, always "the newest thing on `main`".
 
 This only works because the ECR repository itself is created with
 `ImageTagMutability: MUTABLE` (`photo-uploader-infra/cfn/modules/
@@ -136,20 +133,24 @@ repo's README):
 | `AWS_ECR_PUSH_ROLE_ARN` (secret) | `arn:aws:iam::123456789012:role/photo-uploader-gha-ecr-push-role` |
 | `ECR_REPOSITORY` (secret) | `photo-uploader-app` |
 | `AWS_REGION` (variable) | `us-east-1` |
+| `PIPELINE_ARTIFACT_BUCKET` (variable) | the `ArtifactBucketName` output from the infra repo's root stack -- where `ecs/appspec.yaml` + `ecs/taskdef.json` get zipped and uploaded to for CodePipeline to pick up |
 
 ## What happens on push to `main`
 
 1. `build-and-push.yml` assumes `AWS_ECR_PUSH_ROLE_ARN` via **OIDC** -- a
    role that (via the `job_workflow_ref` trust condition) only this exact
    workflow file, in this exact repo, can assume.
-2. Builds the image, tags it `sha-<sha>` and `latest`, pushes both.
+2. Builds the image, tags it `latest`, pushes it, then zips this repo's
+   `ecs/appspec.yaml` + `ecs/taskdef.json` and uploads that zip to S3
+   (`PIPELINE_ARTIFACT_BUCKET`) -- no GitHub connection for AWS to read
+   this repo directly.
 3. The `:latest` push fires an `ECR Image Action` event -> the
    `EcrPushRule` EventBridge rule in the infra stack -> starts
    `photo-uploader-pipeline`.
-4. CodePipeline reads the new image URI (ECR source action) and this
-   repo's `ecs/appspec.yaml` + `ecs/taskdef.json` (GitHub source action,
-   `DetectChanges: false` so it never self-triggers on an unrelated
-   commit like this README), hands both to CodeDeploy.
+4. CodePipeline reads the new image URI (ECR source action) and the
+   deploy-templates zip just uploaded to S3 (S3 source action,
+   `PollForSourceChanges: false` so it never self-triggers on every
+   upload), hands both to CodeDeploy.
 5. CodeDeploy registers a new task definition revision, spins up "green"
    tasks, waits for them to pass the ALB health check, shifts the
    listener's traffic from "blue" to "green", then terminates the old
