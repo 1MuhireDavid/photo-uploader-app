@@ -78,24 +78,34 @@ image -- the one tag EventBridge and the CodePipeline ECR source action
 watch, always "the newest thing on `main`".
 
 This only works because the ECR repository itself is created with
-`ImageTagMutability: MUTABLE` (`photo-uploader-infra/cfn/modules/
-03-backing-services.yaml`); otherwise re-pushing `:latest` on every build
-would be rejected.
+`ImageTagMutability: MUTABLE` (`photo-uploader-infra/bootstrap/
+00-bootstrap.yaml`); otherwise re-pushing `:latest` on every build would
+be rejected.
 
-## Why a bootstrap placeholder image
+## Why the first image push happens before the infra stack exists
 
-The ECS service, ALB target groups, and CodeDeploy all get created by
-CloudFormation the very first time the infra stack runs -- before this
-app's GitHub Action has ever pushed a real image. To avoid a chicken-
-and-egg failure (`CREATE_COMPLETE` blocked on an image that doesn't
-exist), the task definition's `InitialImageTag` parameter defaults to the
-sentinel value `bootstrap`, which the infra template swaps for a public
-`nginx` image (remapped to listen on the same container port) -- see
-`../photo-uploader-infra/cfn/modules/06-alb-ecs.yaml`. The ALB health
-check path is `/` for exactly this reason: it's the one path both nginx
-and this app answer with `200`. Once you push a real image and CodeDeploy
-runs its first blue/green release, CodeDeploy -- not this parameter --
-owns the running task definition from then on.
+The infra VPC has no NAT Gateway, so a private-subnet ECS task can't fall
+back on pulling a public placeholder image over the internet the way a
+NAT-backed setup could. That means a **real image has to already be
+sitting in ECR before the infra root stack's very first `CREATE`** --
+there's no bootstrap/placeholder image involved at all; `InitialImageTag`
+just names a tag that must already exist.
+
+Concretely (see the infra repo's README, "Full setup order"): this
+repo's build workflow gets its secrets and runs **before** the infra
+repo's root stack is created, pushing a real `:latest` image to the ECR
+repo the infra repo's bootstrap stack creates. At that point in the
+sequence, this workflow's later "Upload deploy templates" step (below)
+will fail -- `PIPELINE_ARTIFACT_BUCKET` doesn't exist yet, and
+`ecs/taskdef.json`'s placeholders aren't filled in yet either, since both
+depend on infra stack outputs that don't exist until *after* that first
+CREATE. That failure is expected and harmless: the image push (which
+runs first, in its own step) is all the infra stack's first CREATE needs.
+Once the infra stack has deployed and `ecs/taskdef.json` is filled in
+(below), re-run this workflow -- that run is what CodeDeploy uses for the
+first real blue/green release, which (see the infra repo's README,
+"Validating a deployment") now pauses partway through for manual
+pre-production validation before promoting.
 
 ## One-time setup for `ecs/taskdef.json`
 
@@ -126,12 +136,17 @@ ARN of the task definition revision it just registered -- leave it as-is.
 
 Added via **Settings -> Secrets and variables -> Actions** on this repo,
 using values read from the bootstrap stack's Outputs tab (see the infra
-repo's README):
+repo's README). Only the role ARN is a Secret -- it's not exploitable on
+its own (the trust policy's `sub`/`job_workflow_ref` conditions gate who
+can actually assume it, not knowledge of the ARN), but it's still account
+information not worth printing in plain text in every workflow log. The
+repo name and region are plain non-sensitive config, so they're
+Variables:
 
 | Secret / variable | Example |
 |---|---|
 | `AWS_ECR_PUSH_ROLE_ARN` (secret) | `arn:aws:iam::123456789012:role/photo-uploader-gha-ecr-push-role` |
-| `ECR_REPOSITORY` (secret) | `photo-uploader-app` |
+| `ECR_REPOSITORY` (variable) | `photo-uploader-app` |
 | `AWS_REGION` (variable) | `us-east-1` |
 | `PIPELINE_ARTIFACT_BUCKET` (variable) | the `ArtifactBucketName` output from the infra repo's root stack -- where `ecs/appspec.yaml` + `ecs/taskdef.json` get zipped and uploaded to for CodePipeline to pick up |
 
@@ -152,6 +167,12 @@ repo's README):
    `PollForSourceChanges: false` so it never self-triggers on every
    upload), hands both to CodeDeploy.
 5. CodeDeploy registers a new task definition revision, spins up "green"
-   tasks, waits for them to pass the ALB health check, shifts the
-   listener's traffic from "blue" to "green", then terminates the old
-   "blue" tasks.
+   tasks, waits for them to pass the ALB health check, then points the
+   infra stack's pre-production listener (`TestListenerPort`, ALB port
+   `8081` by default) at the green tasks and **pauses** -- it does not
+   shift real (prod) traffic automatically. Someone has to check the
+   green tasks via that listener and run `aws deploy continue-deployment`
+   (or click "Continue deployment" in the CodeDeploy console) to actually
+   promote them; left untouched, CodeDeploy stops the deployment and
+   rolls back after a wait window instead. See the infra repo's README,
+   "Validating a deployment", for the exact steps.
