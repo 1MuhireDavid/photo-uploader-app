@@ -58,7 +58,6 @@ public class GalleryController {
         model.addAttribute("appOwnerName", appOwnerName);
         model.addAttribute("labName", labName);
         
-
         return "gallery";
     }
 
