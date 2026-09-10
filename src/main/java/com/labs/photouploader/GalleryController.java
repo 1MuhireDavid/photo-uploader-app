@@ -57,6 +57,8 @@ public class GalleryController {
         model.addAttribute("cloudFrontDomain", cloudFrontDomain);
         model.addAttribute("appOwnerName", appOwnerName);
         model.addAttribute("labName", labName);
+        
+
         return "gallery";
     }
 
