@@ -4,7 +4,7 @@ name: "Build and push container image"
 # pushed as ":latest", the one tag EventBridge + the CodePipeline ECR
 # source action watch as "the newest version to deploy".
 #   - the ECR repo itself is ImageTagMutability: MUTABLE (see
-#     photo-uploader-infra/cfn/modules/03-backing-services.yaml), which is
+#     photo-uploader-infra/bootstrap/00-bootstrap.yaml), which is
 #     what makes re-pushing ":latest" on every build valid rather than
 #     rejected.
 on:
@@ -35,7 +35,7 @@ jobs:
       - name: Compute image tag
         id: tags
         run: |
-          REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}"
+          REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
           echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
