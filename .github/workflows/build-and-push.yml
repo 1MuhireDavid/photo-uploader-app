@@ -51,10 +51,16 @@ jobs:
       # CodePipeline's second source action (in photo-uploader-infra) reads
       # these two files from S3 instead of connecting to GitHub directly --
       # no CodeStarSourceConnection/GitHub App to authorize by hand.
+      #
+      # Zipped from the repo root (not `cd ecs` first) so the zip's internal
+      # paths are "ecs/appspec.yaml" / "ecs/taskdef.json" -- that prefix is
+      # what 07-cicd-pipeline.yaml's TaskDefinitionTemplatePath/
+      # AppSpecTemplatePath (DeployTemplatesPath, default "ecs") expect. A
+      # flattened zip (paths without "ecs/") fails the Deploy stage with
+      # "Exception while trying to read the task definition artifact file".
       - name: Upload deploy templates for CodePipeline
         run: |
-          cd ecs
-          zip deploy-templates.zip appspec.yaml taskdef.json
+          zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
           aws s3 cp deploy-templates.zip \
             "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
 
