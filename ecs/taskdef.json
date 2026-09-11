@@ -20,13 +20,13 @@
         { "name": "AWS_REGION", "value": "us-east-1" },
         { "name": "PHOTOS_BUCKET_NAME", "value": "photo-uploader-photos-047719661196-us-east-1" },
         { "name": "CLOUDFRONT_DOMAIN", "value": "d1xjbqq5utb6bp.cloudfront.net" },
-        { "name": "DB_HOST", "value": "photo-uploader-databasestack-170jb5s4a8lw-database-d5chavczp41g.c29usw4u0jid.us-east-1.rds.amazonaws.com" },
+        { "name": "DB_HOST", "value": "photo-uploader-databasestack-rzj0zgtmnpxv-database-qxr1vzoocbpd.c29usw4u0jid.us-east-1.rds.amazonaws.com" },
         { "name": "DB_PORT", "value": "5432" },
         { "name": "DB_NAME", "value": "photogallery" }
       ],
       "secrets": [
-        { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-4fa9220f-01e9-4221-b621-79102afa8da8-OaCLGy:username::" },
-        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-4fa9220f-01e9-4221-b621-79102afa8da8-OaCLGy:password::" }
+        { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:password::" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
