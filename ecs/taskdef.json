@@ -28,6 +28,16 @@
         { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:username::" },
         { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:password::" }
       ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "(exec 3<>/dev/tcp/127.0.0.1/8080) || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
