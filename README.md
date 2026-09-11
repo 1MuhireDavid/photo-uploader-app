@@ -95,17 +95,19 @@ Concretely (see the infra repo's README, "Full setup order"): this
 repo's build workflow gets its secrets and runs **before** the infra
 repo's root stack is created, pushing a real `:latest` image to the ECR
 repo the infra repo's bootstrap stack creates. At that point in the
-sequence, this workflow's later "Upload deploy templates" step (below)
-will fail -- `PIPELINE_ARTIFACT_BUCKET` doesn't exist yet, and
-`ecs/taskdef.json`'s placeholders aren't filled in yet either, since both
-depend on infra stack outputs that don't exist until *after* that first
-CREATE. That failure is expected and harmless: the image push (which
-runs first, in its own step) is all the infra stack's first CREATE needs.
-Once the infra stack has deployed and `ecs/taskdef.json` is filled in
-(below), re-run this workflow -- that run is what CodeDeploy uses for the
-first real blue/green release, which (see the infra repo's README,
-"Validating a deployment") now pauses partway through for manual
-pre-production validation before promoting.
+sequence, this workflow's "Upload deploy templates" step (below) --
+which deliberately runs *before* the image push, see that step's own
+comment for why -- will fail: `PIPELINE_ARTIFACT_BUCKET` doesn't exist
+yet, and `ecs/taskdef.json`'s placeholders aren't filled in yet either,
+since both depend on infra stack outputs that don't exist until *after*
+that first CREATE. That failure is expected and harmless
+(`continue-on-error: true`) -- the job carries on to push the image
+regardless, which is all the infra stack's first CREATE needs. Once the
+infra stack has deployed and `ecs/taskdef.json` is filled in (below),
+re-run this workflow -- that run is what CodeDeploy uses for the first
+real blue/green release, which (see the infra repo's README, "Validating
+a deployment") now pauses partway through for manual pre-production
+validation before promoting.
 
 ## One-time setup for `ecs/taskdef.json`
 
@@ -155,10 +157,13 @@ Variables:
 1. `build-and-push.yml` assumes `AWS_ECR_PUSH_ROLE_ARN` via **OIDC** -- a
    role that (via the `job_workflow_ref` trust condition) only this exact
    workflow file, in this exact repo, can assume.
-2. Builds the image, tags it `latest`, pushes it, then zips this repo's
-   `ecs/appspec.yaml` + `ecs/taskdef.json` and uploads that zip to S3
-   (`PIPELINE_ARTIFACT_BUCKET`) -- no GitHub connection for AWS to read
-   this repo directly.
+2. Zips this repo's `ecs/appspec.yaml` + `ecs/taskdef.json` and uploads
+   that zip to S3 (`PIPELINE_ARTIFACT_BUCKET`) -- no GitHub connection for
+   AWS to read this repo directly -- **then** builds the image and pushes
+   it, in that order deliberately: the image push is what fires the
+   EventBridge trigger below, so the S3 object needs to already be
+   up to date before that happens (see the workflow's own comment on the
+   upload step).
 3. The `:latest` push fires an `ECR Image Action` event -> the
    `EcrPushRule` EventBridge rule in the infra stack -> starts
    `photo-uploader-pipeline`.

@@ -38,6 +38,38 @@ jobs:
           REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
           echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
 
+      # CodePipeline's second source action (in photo-uploader-infra) reads
+      # these two files from S3 instead of connecting to GitHub directly --
+      # no CodeStarSourceConnection/GitHub App to authorize by hand.
+      #
+      # Deliberately runs BEFORE "Build and push image" below: pushing the
+      # image is what fires the ECR PUSH EventBridge rule that starts
+      # CodePipeline, which then immediately reads whatever is CURRENTLY at
+      # this S3 key (PollForSourceChanges: false, see 07-cicd-pipeline.yaml)
+      # -- if the image push happened first, the pipeline could start and
+      # read the S3 object before this step got a chance to update it,
+      # deploying a stale/mismatched deploy-templates.zip.
+      #
+      # Zipped from the repo root (not `cd ecs` first) so the zip's internal
+      # paths are "ecs/appspec.yaml" / "ecs/taskdef.json" -- that prefix is
+      # what 07-cicd-pipeline.yaml's TaskDefinitionTemplatePath/
+      # AppSpecTemplatePath (DeployTemplatesPath, default "ecs") expect. A
+      # flattened zip (paths without "ecs/") fails the Deploy stage with
+      # "Exception while trying to read the task definition artifact file".
+      #
+      # continue-on-error: true -- on the very first run (before the infra
+      # root stack exists), PIPELINE_ARTIFACT_BUCKET isn't set yet and this
+      # step is expected to fail; the image still needs to push regardless
+      # (see the infra repo's README, "Full setup order"). Once the bucket
+      # exists, this step succeeds and its ordering above is what matters.
+      - name: Upload deploy templates for CodePipeline
+        id: upload-templates
+        continue-on-error: true
+        run: |
+          zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
+          aws s3 cp deploy-templates.zip \
+            "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -48,24 +80,12 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.latest_tag }}
 
-      # CodePipeline's second source action (in photo-uploader-infra) reads
-      # these two files from S3 instead of connecting to GitHub directly --
-      # no CodeStarSourceConnection/GitHub App to authorize by hand.
-      #
-      # Zipped from the repo root (not `cd ecs` first) so the zip's internal
-      # paths are "ecs/appspec.yaml" / "ecs/taskdef.json" -- that prefix is
-      # what 07-cicd-pipeline.yaml's TaskDefinitionTemplatePath/
-      # AppSpecTemplatePath (DeployTemplatesPath, default "ecs") expect. A
-      # flattened zip (paths without "ecs/") fails the Deploy stage with
-      # "Exception while trying to read the task definition artifact file".
-      - name: Upload deploy templates for CodePipeline
-        run: |
-          zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
-          aws s3 cp deploy-templates.zip \
-            "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
-
       - name: Summary
         run: |
           echo "### Image pushed" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`${{ steps.tags.outputs.latest_tag }}\` (deploy trigger)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- deploy templates uploaded to \`s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.upload-templates.outcome }}" = "success" ]; then
+            echo "- deploy templates uploaded to \`s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- deploy templates upload **failed** (expected on the very first run, before PIPELINE_ARTIFACT_BUCKET exists -- re-run this workflow once the infra root stack has deployed)" >> "$GITHUB_STEP_SUMMARY"
+          fi
