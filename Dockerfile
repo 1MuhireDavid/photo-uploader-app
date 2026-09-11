@@ -19,7 +19,11 @@ RUN mvn -B clean package -DskipTests
 FROM public.ecr.aws/amazoncorretto/amazoncorretto:21
 WORKDIR /app
 
-RUN groupadd -r app && useradd -r -g app app
+# shadow-utils (groupadd/useradd) isn't installed in this base image by
+# default, so add the user/group directly rather than pulling in the
+# package just for this.
+RUN echo "app:x:1000:" >> /etc/group && \
+    echo "app:x:1000:1000::/nonexistent:/sbin/nologin" >> /etc/passwd
 COPY --from=build /build/target/app.jar ./app.jar
 RUN chown app:app ./app.jar
 USER app
