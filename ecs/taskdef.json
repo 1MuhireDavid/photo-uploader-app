@@ -16,7 +16,7 @@
       ],
       "environment": [
         { "name": "APP_OWNER_NAME", "value": "David Muhire" },
-        { "name": "LAB_NAME", "value": "Photo Uploader Lab V2" },
+        { "name": "LAB_NAME", "value": "Photo Uploader Lab" },
         { "name": "AWS_REGION", "value": "us-east-1" },
         { "name": "PHOTOS_BUCKET_NAME", "value": "photo-uploader-photos-047719661196-us-east-1" },
         { "name": "CLOUDFRONT_DOMAIN", "value": "d1xjbqq5utb6bp.cloudfront.net" },
