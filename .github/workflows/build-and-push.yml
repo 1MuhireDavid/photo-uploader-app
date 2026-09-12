@@ -38,24 +38,32 @@ jobs:
           REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
           echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
 
-      # taskdef.json carries <DB_HOST>/<DB_SECRET_ARN> placeholders instead
-      # of hardcoded values, because both change every time the RDS
-      # instance gets replaced (a new managed secret + endpoint each time)
-      # -- a hand-edited value goes stale the next time that happens and
-      # fails deployment with a Secrets Manager AccessDeniedException.
-      # Fetching them fresh here means that can't happen.
+      # taskdef.json carries placeholders instead of hardcoded values for
+      # everything the infra stack generates, because all of it changes
+      # when the stack is torn down and recreated: RDS gets a new endpoint
+      # and a new managed-secret ARN (stale values fail the deployment
+      # with a Secrets Manager AccessDeniedException), and CloudFront gets
+      # a new distribution domain (a stale one leaves every uploaded photo
+      # showing as a broken image while uploads and listings still work,
+      # because only the <img> URLs depend on it). Fetching them fresh on
+      # every run means none of that can drift.
       #
       # continue-on-error: true for the same reason as the step below --
       # on the very first run, the root stack doesn't exist yet either.
-      - name: Fetch current DB config from CloudFormation
-        id: db
+      - name: Fetch current stack config from CloudFormation
+        id: cfn
         continue-on-error: true
         run: |
           OUTPUTS=$(aws cloudformation describe-stacks \
             --stack-name "${{ vars.INFRA_STACK_NAME }}" \
             --query "Stacks[0].Outputs" --output json)
-          echo "host=$(echo "$OUTPUTS" | jq -r '.[] | select(.OutputKey=="DbEndpointAddress") | .OutputValue')" >> "$GITHUB_OUTPUT"
-          echo "secret_arn=$(echo "$OUTPUTS" | jq -r '.[] | select(.OutputKey=="DbSecretArn") | .OutputValue')" >> "$GITHUB_OUTPUT"
+          get() { echo "$OUTPUTS" | jq -r ".[] | select(.OutputKey==\"$1\") | .OutputValue"; }
+          {
+            echo "host=$(get DbEndpointAddress)"
+            echo "secret_arn=$(get DbSecretArn)"
+            echo "photos_bucket=$(get PhotosBucketName)"
+            echo "cloudfront_domain=$(get CloudFrontDomainName)"
+          } >> "$GITHUB_OUTPUT"
 
       # CodePipeline's second source action (in photo-uploader-infra) reads
       # these two files from S3 instead of connecting to GitHub directly --
@@ -86,8 +94,10 @@ jobs:
         continue-on-error: true
         run: |
           sed -i \
-            -e "s|<DB_HOST>|${{ steps.db.outputs.host }}|" \
-            -e "s|<DB_SECRET_ARN>|${{ steps.db.outputs.secret_arn }}|g" \
+            -e "s|<DB_HOST>|${{ steps.cfn.outputs.host }}|" \
+            -e "s|<DB_SECRET_ARN>|${{ steps.cfn.outputs.secret_arn }}|g" \
+            -e "s|<PHOTOS_BUCKET_NAME>|${{ steps.cfn.outputs.photos_bucket }}|" \
+            -e "s|<CLOUDFRONT_DOMAIN>|${{ steps.cfn.outputs.cloudfront_domain }}|" \
             ecs/taskdef.json
           zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
           aws s3 cp deploy-templates.zip \

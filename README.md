@@ -121,18 +121,20 @@ in GitHub's web editor (pencil icon) or any local text editor and replace:
 | `<AWS_ACCOUNT_ID>` | AWS Console, top-right account menu (your 12-digit Account ID) |
 | `<AWS_REGION>` | AWS Console's top-right region selector (wherever you deployed the infra stack) |
 | `<YOUR_FULL_NAME>` | your name, exactly as you want it displayed |
-| `<PHOTOS_BUCKET_NAME>` | CloudFormation console -> root stack (`photo-uploader`) -> Outputs -> `PhotosBucketName` |
-| `<CLOUDFRONT_DOMAIN>` | same Outputs tab -> `CloudFrontDomainName` |
 
 Commit directly to `main` (GitHub web UI's **Commit changes** button, or a
 normal `git commit` + `git push`).
 
-`<DB_HOST>`/`<DB_SECRET_ARN>` are **not** in this table -- leave those two
-placeholders as-is. `build-and-push.yml` fetches both fresh from the
-root stack's Outputs on every run and substitutes them automatically,
-because both change every time the RDS instance gets replaced (a new
-managed secret + endpoint each time); a hand-filled value would just go
-stale the next time that happens.
+`<DB_HOST>`, `<DB_SECRET_ARN>`, `<PHOTOS_BUCKET_NAME>` and
+`<CLOUDFRONT_DOMAIN>` are **not** in this table -- leave all four
+placeholders as-is. `build-and-push.yml` fetches them fresh from the root
+stack's Outputs on every run and substitutes them automatically, because
+every one of them changes when the infra stack is torn down and
+recreated: RDS gets a new endpoint and a new managed-secret ARN, and
+CloudFront gets a new distribution domain. A hand-filled value goes stale
+the next time that happens -- a stale DB value fails the deployment
+outright, while a stale CloudFront domain fails quietly (uploads and
+descriptions keep working; every photo just renders as a broken image).
 
 `ecs/appspec.yaml`'s `<TASK_DEFINITION>` placeholder is different: it's a
 **literal string** CodeDeploy itself substitutes at deploy time with the
