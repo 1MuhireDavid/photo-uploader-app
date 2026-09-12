@@ -38,6 +38,25 @@ jobs:
           REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
           echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
 
+      # taskdef.json carries <DB_HOST>/<DB_SECRET_ARN> placeholders instead
+      # of hardcoded values, because both change every time the RDS
+      # instance gets replaced (a new managed secret + endpoint each time)
+      # -- a hand-edited value goes stale the next time that happens and
+      # fails deployment with a Secrets Manager AccessDeniedException.
+      # Fetching them fresh here means that can't happen.
+      #
+      # continue-on-error: true for the same reason as the step below --
+      # on the very first run, the root stack doesn't exist yet either.
+      - name: Fetch current DB config from CloudFormation
+        id: db
+        continue-on-error: true
+        run: |
+          OUTPUTS=$(aws cloudformation describe-stacks \
+            --stack-name "${{ vars.INFRA_STACK_NAME }}" \
+            --query "Stacks[0].Outputs" --output json)
+          echo "host=$(echo "$OUTPUTS" | jq -r '.[] | select(.OutputKey=="DbEndpointAddress") | .OutputValue')" >> "$GITHUB_OUTPUT"
+          echo "secret_arn=$(echo "$OUTPUTS" | jq -r '.[] | select(.OutputKey=="DbSecretArn") | .OutputValue')" >> "$GITHUB_OUTPUT"
+
       # CodePipeline's second source action (in photo-uploader-infra) reads
       # these two files from S3 instead of connecting to GitHub directly --
       # no CodeStarSourceConnection/GitHub App to authorize by hand.
@@ -66,6 +85,10 @@ jobs:
         id: upload-templates
         continue-on-error: true
         run: |
+          sed -i \
+            -e "s|<DB_HOST>|${{ steps.db.outputs.host }}|" \
+            -e "s|<DB_SECRET_ARN>|${{ steps.db.outputs.secret_arn }}|g" \
+            ecs/taskdef.json
           zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
           aws s3 cp deploy-templates.zip \
             "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
