@@ -25,8 +25,8 @@
         { "name": "DB_NAME", "value": "photogallery" }
       ],
       "secrets": [
-        { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:username::" },
-        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-ad3e60a0-432f-4c96-9406-204f9f66fcaf-pnV4KI:password::" }
+        { "name": "DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-2d6af047-25ae-40b2-b1e8-ac5e8abf9a8c-ZIteYP:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:047719661196:secret:rds!db-2d6af047-25ae-40b2-b1e8-ac5e8abf9a8c-ZIteYP:password::" }
       ],
       "healthCheck": {
         "command": [
