@@ -106,8 +106,7 @@ stack's first CREATE needs. Once the infra stack has deployed and
 `ecs/taskdef.json`'s remaining placeholders are filled in (below),
 re-run this workflow -- that run is what CodeDeploy uses for the first
 real blue/green release, which (see the infra repo's README, "Validating
-a deployment") gives you a short pre-production validation window that
-resolves on its own -- no manual step required.
+a deployment") runs unattended -- no manual step required.
 
 ## One-time setup for `ecs/taskdef.json`
 
@@ -183,10 +182,9 @@ Variables:
 5. CodeDeploy registers a new task definition revision, spins up "green"
    tasks, waits for them to pass the ALB health check, then points the
    infra stack's pre-production listener (`TestListenerPort`, ALB port
-   `8081` by default) at the green tasks and shifts 10% of real (prod)
-   traffic to them for 5 minutes before shifting the rest
-   (`DeploymentConfigName`, a CodeDeploy canary config) -- no manual step
-   required, and nothing to click. That 5-minute window is when to check
-   the green tasks via the test listener; if they're bad, stop and roll
-   back the deployment from the CodeDeploy console. See the infra repo's
-   README, "Validating a deployment", for the exact steps.
+   `8081` by default) at the green tasks, then shifts real (prod) traffic
+   to them -- no manual step required, and nothing to click. The
+   blue/green shift is the safety mechanism: green only gets prod traffic
+   after passing the ALB health check, and a failed deployment rolls back
+   to blue on its own. See the infra repo's README, "Validating a
+   deployment", for the exact steps.
