@@ -15,7 +15,6 @@ import software.amazon.awssdk.services.s3.S3Client;
  */
 @Configuration
 public class S3Config {
-
     @Bean
     public S3Client s3Client(@Value("${AWS_REGION:us-east-1}") String region) {
         return S3Client.builder()
