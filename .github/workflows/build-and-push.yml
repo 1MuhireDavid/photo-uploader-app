@@ -23,42 +23,22 @@ env:
 
 jobs:
   build-and-push:
-    name: Test, build and push
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Validate the repository configuration
-        env:
-          ECR_PUSH_ROLE_ARN: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
-        run: |
-          set -euo pipefail
-          missing=()
-          for name in AWS_REGION INFRA_STACK_NAME ECR_REPOSITORY ECR_PUSH_ROLE_ARN; do
-            if [ -z "${!name}" ]; then
-              missing+=("$name")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Missing repository configuration: ${missing[*]}"
-            exit 1
-          fi
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
-      - name: Run the test suite
+      - name: Test
         run: mvn -B --no-transfer-progress test
 
-      - name: Assume the ECR push role
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -67,95 +47,51 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Resolve the image reference
-        id: image
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
+      # Skipped on the very first run: the image has to reach ECR before the
+      # infra stack can create the ECS service that pulls it.
+      - name: Render and upload deployment templates
         run: |
           set -euo pipefail
-          echo "uri=$REGISTRY/$ECR_REPOSITORY:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Look up the infrastructure stack
-        id: stack
-        run: |
-          set -euo pipefail
-          if error="$(aws cloudformation describe-stacks --stack-name "$INFRA_STACK_NAME" 2>&1 >/dev/null)"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          elif printf '%s' "$error" | grep -q 'does not exist'; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Stack '$INFRA_STACK_NAME' does not exist yet; publishing the bootstrap image only"
-          else
-            echo "::error::Unable to describe stack '$INFRA_STACK_NAME': $error"
-            exit 1
+          if ! outputs="$(aws cloudformation describe-stacks --stack-name "$INFRA_STACK_NAME" \
+                            --query 'Stacks[0].Outputs' --output json 2>error.log)"; then
+            grep -q 'does not exist' error.log || { cat error.log; exit 1; }
+            echo "::notice::Stack '$INFRA_STACK_NAME' does not exist yet; pushing the image only"
+            exit 0
           fi
 
-      - name: Render the deployment templates
-        id: render
-        if: steps.stack.outputs.exists == 'true'
-        run: |
-          set -euo pipefail
-
-          outputs="$(aws cloudformation describe-stacks \
-            --stack-name "$INFRA_STACK_NAME" \
-            --query 'Stacks[0].Outputs' --output json)"
-
-          declare -A config=()
-          missing=()
+          declare -A cfg
           for key in ArtifactBucketName TaskExecutionRoleArn TaskRoleArn LogGroupName \
                      PhotosBucketName CloudFrontDomainName DbEndpointAddress DbPort \
                      DbName DbSecretArn; do
-            value="$(jq -r --arg key "$key" 'map(select(.OutputKey == $key)) | .[0].OutputValue // empty' <<<"$outputs")"
-            if [ -z "$value" ]; then
-              missing+=("$key")
-            else
-              config["$key"]="$value"
-            fi
+            cfg[$key]="$(jq -r --arg k "$key" 'map(select(.OutputKey == $k))[0].OutputValue // empty' <<<"$outputs")"
+            [ -n "${cfg[$key]}" ] || { echo "::error::Stack output missing: $key"; exit 1; }
           done
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Stack '$INFRA_STACK_NAME' is missing outputs: ${missing[*]}"
-            exit 1
-          fi
 
           rendered="$RENDER_DIR/$TEMPLATES_DIR"
           mkdir -p "$rendered"
-
-          sed -e "s|<TASK_EXECUTION_ROLE_ARN>|${config[TaskExecutionRoleArn]}|g" \
-              -e "s|<TASK_ROLE_ARN>|${config[TaskRoleArn]}|g" \
-              -e "s|<LOG_GROUP>|${config[LogGroupName]}|g" \
+          sed -e "s|<TASK_EXECUTION_ROLE_ARN>|${cfg[TaskExecutionRoleArn]}|g" \
+              -e "s|<TASK_ROLE_ARN>|${cfg[TaskRoleArn]}|g" \
+              -e "s|<LOG_GROUP>|${cfg[LogGroupName]}|g" \
               -e "s|<AWS_REGION>|$AWS_REGION|g" \
-              -e "s|<PHOTOS_BUCKET_NAME>|${config[PhotosBucketName]}|g" \
-              -e "s|<CLOUDFRONT_DOMAIN>|${config[CloudFrontDomainName]}|g" \
-              -e "s|<DB_HOST>|${config[DbEndpointAddress]}|g" \
-              -e "s|<DB_PORT>|${config[DbPort]}|g" \
-              -e "s|<DB_NAME>|${config[DbName]}|g" \
-              -e "s|<DB_SECRET_ARN>|${config[DbSecretArn]}|g" \
+              -e "s|<PHOTOS_BUCKET_NAME>|${cfg[PhotosBucketName]}|g" \
+              -e "s|<CLOUDFRONT_DOMAIN>|${cfg[CloudFrontDomainName]}|g" \
+              -e "s|<DB_HOST>|${cfg[DbEndpointAddress]}|g" \
+              -e "s|<DB_PORT>|${cfg[DbPort]}|g" \
+              -e "s|<DB_NAME>|${cfg[DbName]}|g" \
+              -e "s|<DB_SECRET_ARN>|${cfg[DbSecretArn]}|g" \
               "$TEMPLATES_DIR/taskdef.json" > "$rendered/taskdef.json"
 
           leftover="$(grep -oE '<[A-Z0-9_]+>' "$rendered/taskdef.json" | grep -vx '<IMAGE1_NAME>' | sort -u || true)"
-          if [ -n "$leftover" ]; then
-            echo "::error::Unsubstituted placeholders in taskdef.json: $(tr '\n' ' ' <<<"$leftover")"
-            exit 1
-          fi
-
+          [ -z "$leftover" ] || { echo "::error::Unsubstituted placeholders: $leftover"; exit 1; }
           jq empty "$rendered/taskdef.json"
 
           cp "$TEMPLATES_DIR/appspec.yaml" "$rendered/appspec.yaml"
           (cd "$RENDER_DIR" && zip -qr deploy-templates.zip "$TEMPLATES_DIR")
-
-          echo "artifact_bucket=${config[ArtifactBucketName]}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload the deployment templates
-        if: steps.stack.outputs.exists == 'true'
-        env:
-          ARTIFACT_BUCKET: ${{ steps.render.outputs.artifact_bucket }}
-        run: |
-          set -euo pipefail
           aws s3 cp "$RENDER_DIR/deploy-templates.zip" \
-            "s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" --only-show-errors
+            "s3://${cfg[ArtifactBucketName]}/$ARTIFACT_KEY" --only-show-errors
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Build and push the image
         uses: docker/build-push-action@v6
@@ -163,29 +99,7 @@ jobs:
           context: .
           push: true
           provenance: false
-          tags: ${{ steps.image.outputs.uri }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:latest
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Publish the run summary
-        env:
-          IMAGE_URI: ${{ steps.image.outputs.uri }}
-          STACK_EXISTS: ${{ steps.stack.outputs.exists }}
-          ARTIFACT_BUCKET: ${{ steps.render.outputs.artifact_bucket }}
-        run: |
-          set -euo pipefail
-          {
-            echo "### Image"
-            echo "- \`$IMAGE_URI\`"
-            echo "- revision \`$GITHUB_SHA\`"
-            echo
-            echo "### Deployment templates"
-            if [ "$STACK_EXISTS" = "true" ]; then
-              echo "- uploaded to \`s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY\`"
-            else
-              echo "- skipped: stack \`$INFRA_STACK_NAME\` does not exist yet"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
