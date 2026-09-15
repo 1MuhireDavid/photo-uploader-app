@@ -1,124 +1,191 @@
-name: "Build and push container image"
+name: Build and push container image
 
-# Tagging strategy: keep it simple -- every successful build on main is
-# pushed as ":latest", the one tag EventBridge + the CodePipeline ECR
-# source action watch as "the newest version to deploy".
-#   - the ECR repo itself is ImageTagMutability: MUTABLE (see
-#     photo-uploader-infra/bootstrap/00-bootstrap.yaml), which is
-#     what makes re-pushing ":latest" on every build valid rather than
-#     rejected.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
-  id-token: write   # required for OIDC -> AWS
   contents: read
+  id-token: write
+
+concurrency:
+  group: build-and-push-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  INFRA_STACK_NAME: ${{ vars.INFRA_STACK_NAME }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  TEMPLATES_DIR: ecs
+  RENDER_DIR: build
+  ARTIFACT_KEY: deploy-templates/deploy-templates.zip
 
 jobs:
   build-and-push:
+    name: Test, build and push
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Configure AWS credentials via OIDC
+      - name: Validate the repository configuration
+        env:
+          ECR_PUSH_ROLE_ARN: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in AWS_REGION INFRA_STACK_NAME ECR_REPOSITORY ECR_PUSH_ROLE_ARN; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing repository configuration: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run the test suite
+        run: mvn -B --no-transfer-progress test
+
+      - name: Assume the ECR push role
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
-        id: ecr-login
+        id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Compute image tag
-        id: tags
+      - name: Resolve the image reference
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          REPO_URI="${{ steps.ecr-login.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
-          echo "latest_tag=$REPO_URI:latest" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          echo "uri=$REGISTRY/$ECR_REPOSITORY:latest" >> "$GITHUB_OUTPUT"
 
-      # taskdef.json carries placeholders instead of hardcoded values for
-      # everything the infra stack generates, because all of it changes
-      # when the stack is torn down and recreated: RDS gets a new endpoint
-      # and a new managed-secret ARN (stale values fail the deployment
-      # with a Secrets Manager AccessDeniedException), and CloudFront gets
-      # a new distribution domain (a stale one leaves every uploaded photo
-      # showing as a broken image while uploads and listings still work,
-      # because only the <img> URLs depend on it). Fetching them fresh on
-      # every run means none of that can drift.
-      #
-      # continue-on-error: true for the same reason as the step below --
-      # on the very first run, the root stack doesn't exist yet either.
-      - name: Fetch current stack config from CloudFormation
-        id: cfn
-        continue-on-error: true
+      - name: Look up the infrastructure stack
+        id: stack
         run: |
-          OUTPUTS=$(aws cloudformation describe-stacks \
-            --stack-name "${{ vars.INFRA_STACK_NAME }}" \
-            --query "Stacks[0].Outputs" --output json)
-          get() { echo "$OUTPUTS" | jq -r ".[] | select(.OutputKey==\"$1\") | .OutputValue"; }
-          {
-            echo "host=$(get DbEndpointAddress)"
-            echo "secret_arn=$(get DbSecretArn)"
-            echo "photos_bucket=$(get PhotosBucketName)"
-            echo "cloudfront_domain=$(get CloudFrontDomainName)"
-          } >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if error="$(aws cloudformation describe-stacks --stack-name "$INFRA_STACK_NAME" 2>&1 >/dev/null)"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "$error" | grep -q 'does not exist'; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stack '$INFRA_STACK_NAME' does not exist yet; publishing the bootstrap image only"
+          else
+            echo "::error::Unable to describe stack '$INFRA_STACK_NAME': $error"
+            exit 1
+          fi
 
-      # CodePipeline's second source action (in photo-uploader-infra) reads
-      # these two files from S3 instead of connecting to GitHub directly --
-      # no CodeStarSourceConnection/GitHub App to authorize by hand.
-      #
-      # Deliberately runs BEFORE "Build and push image" below: pushing the
-      # image is what fires the ECR PUSH EventBridge rule that starts
-      # CodePipeline, which then immediately reads whatever is CURRENTLY at
-      # this S3 key (PollForSourceChanges: false, see 07-cicd-pipeline.yaml)
-      # -- if the image push happened first, the pipeline could start and
-      # read the S3 object before this step got a chance to update it,
-      # deploying a stale/mismatched deploy-templates.zip.
-      #
-      # Zipped from the repo root (not `cd ecs` first) so the zip's internal
-      # paths are "ecs/appspec.yaml" / "ecs/taskdef.json" -- that prefix is
-      # what 07-cicd-pipeline.yaml's TaskDefinitionTemplatePath/
-      # AppSpecTemplatePath (DeployTemplatesPath, default "ecs") expect. A
-      # flattened zip (paths without "ecs/") fails the Deploy stage with
-      # "Exception while trying to read the task definition artifact file".
-      #
-      # continue-on-error: true -- on the very first run (before the infra
-      # root stack exists), PIPELINE_ARTIFACT_BUCKET isn't set yet and this
-      # step is expected to fail; the image still needs to push regardless
-      # (see the infra repo's README, "Full setup order"). Once the bucket
-      # exists, this step succeeds and its ordering above is what matters.
-      - name: Upload deploy templates for CodePipeline
-        id: upload-templates
-        continue-on-error: true
+      - name: Render the deployment templates
+        id: render
+        if: steps.stack.outputs.exists == 'true'
         run: |
-          sed -i \
-            -e "s|<DB_HOST>|${{ steps.cfn.outputs.host }}|" \
-            -e "s|<DB_SECRET_ARN>|${{ steps.cfn.outputs.secret_arn }}|g" \
-            -e "s|<PHOTOS_BUCKET_NAME>|${{ steps.cfn.outputs.photos_bucket }}|" \
-            -e "s|<CLOUDFRONT_DOMAIN>|${{ steps.cfn.outputs.cloudfront_domain }}|" \
-            ecs/taskdef.json
-          zip deploy-templates.zip ecs/appspec.yaml ecs/taskdef.json
-          aws s3 cp deploy-templates.zip \
-            "s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip"
+          set -euo pipefail
+
+          outputs="$(aws cloudformation describe-stacks \
+            --stack-name "$INFRA_STACK_NAME" \
+            --query 'Stacks[0].Outputs' --output json)"
+
+          declare -A config=()
+          missing=()
+          for key in ArtifactBucketName TaskExecutionRoleArn TaskRoleArn LogGroupName \
+                     PhotosBucketName CloudFrontDomainName DbEndpointAddress DbPort \
+                     DbName DbSecretArn; do
+            value="$(jq -r --arg key "$key" 'map(select(.OutputKey == $key)) | .[0].OutputValue // empty' <<<"$outputs")"
+            if [ -z "$value" ]; then
+              missing+=("$key")
+            else
+              config["$key"]="$value"
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Stack '$INFRA_STACK_NAME' is missing outputs: ${missing[*]}"
+            exit 1
+          fi
+
+          rendered="$RENDER_DIR/$TEMPLATES_DIR"
+          mkdir -p "$rendered"
+
+          sed -e "s|<TASK_EXECUTION_ROLE_ARN>|${config[TaskExecutionRoleArn]}|g" \
+              -e "s|<TASK_ROLE_ARN>|${config[TaskRoleArn]}|g" \
+              -e "s|<LOG_GROUP>|${config[LogGroupName]}|g" \
+              -e "s|<AWS_REGION>|$AWS_REGION|g" \
+              -e "s|<PHOTOS_BUCKET_NAME>|${config[PhotosBucketName]}|g" \
+              -e "s|<CLOUDFRONT_DOMAIN>|${config[CloudFrontDomainName]}|g" \
+              -e "s|<DB_HOST>|${config[DbEndpointAddress]}|g" \
+              -e "s|<DB_PORT>|${config[DbPort]}|g" \
+              -e "s|<DB_NAME>|${config[DbName]}|g" \
+              -e "s|<DB_SECRET_ARN>|${config[DbSecretArn]}|g" \
+              "$TEMPLATES_DIR/taskdef.json" > "$rendered/taskdef.json"
+
+          leftover="$(grep -oE '<[A-Z0-9_]+>' "$rendered/taskdef.json" | grep -vx '<IMAGE1_NAME>' | sort -u || true)"
+          if [ -n "$leftover" ]; then
+            echo "::error::Unsubstituted placeholders in taskdef.json: $(tr '\n' ' ' <<<"$leftover")"
+            exit 1
+          fi
+
+          jq empty "$rendered/taskdef.json"
+
+          cp "$TEMPLATES_DIR/appspec.yaml" "$rendered/appspec.yaml"
+          (cd "$RENDER_DIR" && zip -qr deploy-templates.zip "$TEMPLATES_DIR")
+
+          echo "artifact_bucket=${config[ArtifactBucketName]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the deployment templates
+        if: steps.stack.outputs.exists == 'true'
+        env:
+          ARTIFACT_BUCKET: ${{ steps.render.outputs.artifact_bucket }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "$RENDER_DIR/deploy-templates.zip" \
+            "s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" --only-show-errors
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push image
+      - name: Build and push the image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.tags.outputs.latest_tag }}
+          provenance: false
+          tags: ${{ steps.image.outputs.uri }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Summary
+      - name: Publish the run summary
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+          STACK_EXISTS: ${{ steps.stack.outputs.exists }}
+          ARTIFACT_BUCKET: ${{ steps.render.outputs.artifact_bucket }}
         run: |
-          echo "### Image pushed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`${{ steps.tags.outputs.latest_tag }}\` (deploy trigger)" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.upload-templates.outcome }}" = "success" ]; then
-            echo "- deploy templates uploaded to \`s3://${{ vars.PIPELINE_ARTIFACT_BUCKET }}/deploy-templates/deploy-templates.zip\`" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- deploy templates upload **failed** (expected on the very first run, before PIPELINE_ARTIFACT_BUCKET exists -- re-run this workflow once the infra root stack has deployed)" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          {
+            echo "### Image"
+            echo "- \`$IMAGE_URI\`"
+            echo "- revision \`$GITHUB_SHA\`"
+            echo
+            echo "### Deployment templates"
+            if [ "$STACK_EXISTS" = "true" ]; then
+              echo "- uploaded to \`s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY\`"
+            else
+              echo "- skipped: stack \`$INFRA_STACK_NAME\` does not exist yet"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -94,51 +94,46 @@ just names a tag that must already exist.
 Concretely (see the infra repo's README, "Full setup order"): this
 repo's build workflow gets its secrets and runs **before** the infra
 repo's root stack is created, pushing a real `:latest` image to the ECR
-repo the infra repo's bootstrap stack creates. At that point in the
-sequence, this workflow's "Fetch current DB config from CloudFormation"
-and "Upload deploy templates" steps (below) -- both of which deliberately
-run *before* the image push, see their own comments for why -- will
-fail: the root stack doesn't exist yet for the first to query, and
-`PIPELINE_ARTIFACT_BUCKET` doesn't exist yet for the second to upload to.
-Both failures are expected and harmless (`continue-on-error: true`) --
-the job carries on to push the image regardless, which is all the infra
-stack's first CREATE needs. Once the infra stack has deployed and
-`ecs/taskdef.json`'s remaining placeholders are filled in (below),
-re-run this workflow -- that run is what CodeDeploy uses for the first
-real blue/green release, which (see the infra repo's README, "Validating
-a deployment") runs unattended -- no manual step required.
+repo the infra repo's bootstrap stack creates. The workflow's "Look up
+the infrastructure stack" step detects that the root stack does not exist
+yet, emits a notice, and skips the two deploy-template steps for that run
+only -- the image still pushes, which is all the infra stack's first
+`CREATE` needs. Any *other* failure to read the stack (missing IAM
+permission, wrong `INFRA_STACK_NAME`, a throttled API call) fails the job
+instead of being swallowed.
 
-## One-time setup for `ecs/taskdef.json`
+Once the infra stack has deployed, re-run the workflow from the Actions
+tab (`workflow_dispatch`) -- that run renders and uploads the deploy
+templates, and is what CodeDeploy uses for the first real blue/green
+release, which (see the infra repo's README, "Validating a deployment")
+runs unattended -- no manual step required.
 
-`taskdef.json` is a template, but CodePipeline's `CodeDeployToECS` action
-only substitutes the `<IMAGE1_NAME>` placeholder automatically. Everything
-else is a stable value once the infra stack has deployed, so fill it in
-once by editing the file directly -- no CLI needed. Open `ecs/taskdef.json`
-in GitHub's web editor (pencil icon) or any local text editor and replace:
+## How `ecs/taskdef.json` is filled in
 
-| Placeholder | Where to find it |
-|---|---|
-| `<AWS_ACCOUNT_ID>` | AWS Console, top-right account menu (your 12-digit Account ID) |
-| `<AWS_REGION>` | AWS Console's top-right region selector (wherever you deployed the infra stack) |
-| `<YOUR_FULL_NAME>` | your name, exactly as you want it displayed |
+`taskdef.json` is a pure template -- nothing in it is hand-edited. Two
+different systems fill it in:
 
-Commit directly to `main` (GitHub web UI's **Commit changes** button, or a
-normal `git commit` + `git push`).
+- **`build-and-push.yml`** resolves every `<PLACEHOLDER>` except
+  `<IMAGE1_NAME>` from the root stack's Outputs on each run, renders the
+  result into `build/ecs/taskdef.json` (the file in the repo is never
+  mutated), then fails the job if any placeholder survived or the result
+  is not valid JSON.
+- **CodePipeline's `CodeDeployToECS` action** substitutes `<IMAGE1_NAME>`
+  with the image URI from the ECR source action at deploy time.
 
-`<DB_HOST>`, `<DB_SECRET_ARN>`, `<PHOTOS_BUCKET_NAME>` and
-`<CLOUDFRONT_DOMAIN>` are **not** in this table -- leave all four
-placeholders as-is. `build-and-push.yml` fetches them fresh from the root
-stack's Outputs on every run and substitutes them automatically, because
-every one of them changes when the infra stack is torn down and
-recreated: RDS gets a new endpoint and a new managed-secret ARN, and
-CloudFront gets a new distribution domain. A hand-filled value goes stale
-the next time that happens -- a stale DB value fails the deployment
-outright, while a stale CloudFront domain fails quietly (uploads and
-descriptions keep working; every photo just renders as a broken image).
+Everything is resolved per run because every value changes when the infra
+stack is torn down and recreated: RDS gets a new endpoint and a new
+managed-secret ARN, CloudFront gets a new distribution domain, and the
+task roles and log group are recreated under a new account/stack. A
+hand-filled value goes stale the next time that happens -- a stale DB
+value fails the deployment outright, while a stale CloudFront domain
+fails quietly (uploads and descriptions keep working; every photo just
+renders as a broken image).
 
 `ecs/appspec.yaml`'s `<TASK_DEFINITION>` placeholder is different: it's a
 **literal string** CodeDeploy itself substitutes at deploy time with the
-ARN of the task definition revision it just registered -- leave it as-is.
+ARN of the task definition revision it just registered. `appspec.yaml` is
+copied into the zip verbatim and never templated by the workflow.
 
 ## Required GitHub repo secrets
 
@@ -156,25 +151,25 @@ Variables:
 | `AWS_ECR_PUSH_ROLE_ARN` (secret) | `arn:aws:iam::123456789012:role/photo-uploader-gha-ecr-push-role` |
 | `ECR_REPOSITORY` (variable) | `photo-uploader-app` |
 | `AWS_REGION` (variable) | `us-east-1` |
-| `PIPELINE_ARTIFACT_BUCKET` (variable) | the `ArtifactBucketName` output from the infra repo's root stack -- where `ecs/appspec.yaml` + `ecs/taskdef.json` get zipped and uploaded to for CodePipeline to pick up |
-| `INFRA_STACK_NAME` (variable) | `photo-uploader` -- the root stack's name, used to fetch `DbEndpointAddress`/`DbSecretArn` fresh on every run (see "One-time setup" above) |
+| `INFRA_STACK_NAME` (variable) | `photo-uploader` -- the root stack's name. Every other deployment value, including the artifact bucket, is read from this stack's Outputs on each run, so there is no separate bucket variable to keep in sync |
 
 ## What happens on push to `main`
 
 1. `build-and-push.yml` assumes `AWS_ECR_PUSH_ROLE_ARN` via **OIDC** -- a
    role that (via the `job_workflow_ref` trust condition) only this exact
    workflow file, in this exact repo, can assume.
-2. Fetches the current `DbEndpointAddress`/`DbSecretArn` from the root
-   stack's Outputs and substitutes them into `ecs/taskdef.json`'s
-   `<DB_HOST>`/`<DB_SECRET_ARN>` placeholders, then zips this repo's
-   `ecs/appspec.yaml` + that filled-in `ecs/taskdef.json` and uploads the
-   zip to S3 (`PIPELINE_ARTIFACT_BUCKET`) -- no GitHub connection for AWS
-   to read this repo directly -- **then** builds the image and pushes it,
-   in that order deliberately: the image push is what fires the
-   EventBridge trigger below, so the S3 object needs to already be up to
-   date before that happens (see the workflow's own comments on both
-   steps).
-3. The `:latest` push fires an `ECR Image Action` event -> the
+2. Renders `ecs/taskdef.json` from the root stack's Outputs, validates
+   it, zips it with `ecs/appspec.yaml` and uploads the zip to the
+   `ArtifactBucketName` bucket -- no GitHub connection for AWS to read
+   this repo directly -- **then** builds the image and pushes it, in that
+   order deliberately: the image push is what fires the EventBridge
+   trigger below, so the S3 object needs to already be up to date before
+   that happens. Because the render and upload steps are strict, a
+   failure in either aborts the job before anything is pushed.
+3. The image is pushed as `:latest` only, carrying an
+   `org.opencontainers.image.revision` label with the commit SHA so a
+   running image can still be traced back to a commit. The push fires an
+   `ECR Image Action` event -> the
    `EcrPushRule` EventBridge rule in the infra stack -> starts
    `photo-uploader-pipeline`.
 4. CodePipeline reads the new image URI (ECR source action) and the
