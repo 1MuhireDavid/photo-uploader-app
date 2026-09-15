@@ -1,32 +1,39 @@
-# --- Build stage -----------------------------------------------------
+# --- Build stage (compile and package) -----------------------------------------------------
+# maven to build the project, naming it build allows
+# referencing its outputs in later steps, 
+# Set /build as a working directory to avoid polluting the root filesystem with build artifacts.
 FROM maven:3.9-amazoncorretto-21 AS build
 WORKDIR /build
 
 # Cache dependencies separately from source for faster rebuilds
+# copy pom.xml into container and download dependencies required for the project
 COPY pom.xml .
 RUN mvn -B dependency:go-offline
 
+# copy source code into container and build the project and package into a runnable jar file
+# skip tests to speed up the build process
 COPY src ./src
 RUN mvn -B clean package -DskipTests
 
-# --- Runtime stage -----------------------------------------------------
+
+# --- Runtime stage (execution environment & reduced image size) -----------------------------------------------------
 # Amazon Corretto (AWS's own OpenJDK build), pulled from the Amazon ECR
-# Public Gallery -- no Docker Hub pull-rate limits to worry about in CI.
-# NOTE: the Public Gallery only mirrors the Amazon Linux 2023 (glibc)
-# tags, not the Alpine (musl) ones -- those are Docker-Hub-only. Hence
-# plain "21" here instead of "21-alpine", and groupadd/useradd below
-# instead of Alpine's addgroup/adduser.
+# Sets the working directory to /app
 FROM public.ecr.aws/amazoncorretto/amazoncorretto:21
 WORKDIR /app
 
-# shadow-utils (groupadd/useradd) isn't installed in this base image by
-# default, so add the user/group directly rather than pulling in the
-# package just for this.
+# create a non-root user to run the application for security reasons
+# append new system group and user
 RUN echo "app:x:1000:" >> /etc/group && \
     echo "app:x:1000:1000::/nonexistent:/sbin/nologin" >> /etc/passwd
+
+#copy only compiled jar file from build stage
+#grant ownership of the jar file to the non-root user
+# Switches the active execution user to app for all subsequent operations
 COPY --from=build /build/target/app.jar ./app.jar
 RUN chown app:app ./app.jar
 USER app
 
+#documents the app listens on that 8080
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]

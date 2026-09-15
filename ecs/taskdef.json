@@ -12,7 +12,9 @@
       "image": "<IMAGE1_NAME>",
       "essential": true,
       "portMappings": [
-        { "containerPort": 8080, "protocol": "tcp" }
+        { "containerPort": 8080, 
+        "protocol": "tcp"
+    }
       ],
       "environment": [
         { "name": "APP_OWNER_NAME", "value": "David Muhire" },
