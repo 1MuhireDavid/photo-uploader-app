@@ -102,5 +102,3 @@ jobs:
           labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-ACT_BUCKET exists -- re-run this workflow once the infra root stack has deployed)" >> "$GITHUB_STEP_SUMMARY"
-          fi
